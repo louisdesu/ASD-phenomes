@@ -1,0 +1,522 @@
+---
+title: "ASD Phenome Scan"
+author: "Louis Klein"
+date: "10/11/2020"
+output: html_notebook
+css: table-style.css
+---
+
+setup document and load files
+
+```{r settings, message=FALSE, warning=FALSE}
+library(easypackages)
+suppressPackageStartupMessages(
+  libraries("knitr","tidyverse","magrittr")
+)
+
+knitr::opts_chunk$set(
+  autodep = TRUE, # analyse chunk dependencies by automatically detecting global variables
+  cache = TRUE, # cache code chunks so that recompute will only occur on change
+  cache.comments = FALSE, # changing comments will not invalidate the cache
+  message = FALSE, # discard messages
+  warning = FALSE # discard warnings
+  )
+
+options(max.print = 3000)
+
+### Load data ------------------------------------------------------------------
+
+load(file = "datafiles/workspace_10-11-20.RData")
+glimpse(phenomes)
+```
+
+import data and replace negative values with `NA`s
+
+```{r}
+# read data into R and convert missing to NAs
+phenomes <- read_csv('datafiles/AGRE_clinical_data20201016.csv',
+                     col_names = TRUE,
+                     col_types = cols(
+                       individualid = col_factor()
+                     )) %>%
+  mutate(
+    across(
+      where(is.numeric),
+    ~ replace(.,.<0,NA)
+  ))
+
+# spec(phenomes)
+```
+
+remove non-target variables, replace RA codes with `NA`s, and collapse Likert-style variables
+
+```{r}
+# drop unusable columns and prepare dataset
+phenomes_clean <- phenomes %>%
+  select(-c(frequency_of_seizures,hospitalization_year,hospitalization_diagnosis,
+            other_psychiatric_problems,other_psychiatric_problems_typ,cur_supp_and_alter_comm,
+            special_diet_prev_cmmt,gluten_free_diet_duration_commen,other_diet_therapies,
+            other_diet_preferences,depression_age_at_diagnosis,depressive_symp_age_onset,
+            depression_age_at_diagnosis,bmd_age_of_onset,bmd_age_at_diagnosis,anxiety_age_of_onset,
+            anxiety_age_at_diagnosis,age_of_seizure_onset_years,ocd_age_of_onset,
+            ocd_age_at_diagnosis,adhd_age_of_onset,adhd_age_at_diagnosis,behavioral_problem_age_of_onset,
+            behavioral_problem_age_at_diagno,sleep_disorder_age_of_onset,sleep_disorder_age_at_diagnosis,
+            sleep_study,roll_months,sit_months,walk_months,first_words_months,first_phrases_months,
+            toliet_training_day_bladder_mont,toliet_training_day_bowel_months,special_diet_current,
+            toliet_training_night_bladder_mo,toliet_training_night_bowel_mont,number_of_seizures)) %>%
+  mutate_at(
+    vars(alcohol_use,previous_alcohol_use,tobacco_use,previous_tobacco_use,drug_use,
+         previous_drug_use,imaging_study_3),
+  ~ case_when(.>0~1,TRUE~.)) %>%
+  mutate_all(~str_replace_all(.,"9",NA_character_)) %>%
+  mutate_at(vars(-("individualid")),~as.numeric(.)) %>%
+  mutate(individualid = as.factor(individualid))
+
+glimpse(phenomes_clean)
+```
+
+examine missingness by variable, n.b. highly sparse data structure
+
+```{r}
+pmiss <- unlist(lapply(phenomes[,2:122], function(p) sum(is.na(p))))/nrow(phenomes[,2:122])
+sort(pmiss[pmiss > 0], decreasing = TRUE)
+```
+
+apply k-means clustering to dichotomise target continuous variables
+
+```{r}
+library(tidymodels)
+
+k_roll <- phenomes %>%
+  column_to_rownames(var="individualid") %>%
+  select(roll_months) %>%
+  drop_na() %>%
+  kmeans(.,2)
+
+k_sit <- phenomes %>%
+  column_to_rownames(var="individualid") %>%
+  select(sit_months) %>%
+  drop_na() %>%
+  kmeans(.,2)
+
+k_walk <- phenomes %>%
+  column_to_rownames(var="individualid") %>%
+  select(walk_months) %>%
+  drop_na() %>%
+  kmeans(.,2)
+
+k_first_words <- phenomes %>%
+  column_to_rownames(var="individualid") %>%
+  select(first_words_months) %>%
+  drop_na() %>%
+  kmeans(.,2)
+
+k_first_phrases <- phenomes %>%
+  column_to_rownames(var="individualid") %>%
+  select(first_phrases_months) %>%
+  drop_na() %>%
+  kmeans(.,2)
+
+k_tt_day_bladder <- phenomes %>%
+  column_to_rownames(var="individualid") %>%
+  select(toliet_training_day_bladder_mont) %>%
+  drop_na() %>%
+  kmeans(.,2)
+
+k_tt_day_bowel <- phenomes %>%
+  column_to_rownames(var="individualid") %>%
+  select(toliet_training_day_bowel_months) %>%
+  drop_na() %>%
+  kmeans(.,2)
+
+k_tt_night_bladder <- phenomes %>%
+  column_to_rownames(var="individualid") %>%
+  select(toliet_training_night_bladder_mo) %>%
+  drop_na() %>%
+  kmeans(.,2)
+
+k_tt_night_bowel <- phenomes %>%
+  column_to_rownames(var="individualid") %>%
+  select(toliet_training_night_bowel_mont) %>%
+  drop_na() %>%
+  kmeans(.,2)
+
+# Extract and tidy clusters -----------------------------------------------
+
+k_roll_dichot <- k_roll$cluster %>% 
+  enframe() %>%
+  rename(id = "name",
+         roll = "value")
+
+k_sit_dichot <- k_sit$cluster %>% 
+  enframe() %>%
+  rename(id = "name",
+         sit = "value")
+
+k_walk_dichot <- k_walk$cluster %>% 
+  enframe() %>%
+  rename(id = "name",
+         walk = "value")
+
+k_first_words_dichot <- k_first_words$cluster %>% 
+  enframe() %>%
+  rename(id = "name",
+         words = "value")
+
+k_first_phrases_dichot <- k_first_phrases$cluster %>% 
+  enframe() %>%
+  rename(id = "name",
+         phrases = "value")
+
+k_tt_day_bladder_dichot <- k_tt_day_bladder$cluster %>% 
+  enframe() %>%
+  rename(id = "name",
+         diem_bladder = "value")
+
+k_tt_day_bowel_dichot <- k_tt_day_bowel$cluster %>% 
+  enframe() %>%
+  rename(id = "name",
+         diem_bowel = "value")
+
+k_tt_night_bladder_dichot <- k_tt_night_bladder$cluster %>% 
+  enframe() %>%
+  rename(id = "name",
+         nocte_bladder = "value")
+
+k_tt_night_bowel_dichot <- k_tt_night_bowel$cluster %>% 
+  enframe() %>%
+  rename(id = "name",
+         nocte_bowel = "value")
+
+# Join clusters into dataframe --------------------------------------------
+
+k_dichotomisation <- k_roll_dichot %>%
+  full_join(k_sit_dichot, by = "id") %>%
+  full_join(k_walk_dichot, by = "id") %>%
+  full_join(k_first_words_dichot, by = "id") %>%
+  full_join(k_first_phrases_dichot, by = "id") %>%
+  full_join(k_tt_day_bladder_dichot, by = "id") %>%
+  full_join(k_tt_day_bowel_dichot, by = "id") %>%
+  full_join(k_tt_night_bladder_dichot, by = "id") %>%
+  full_join(k_tt_night_bowel_dichot, by = "id")
+```
+
+recode dichotomised data to reflect developmental delay
+
+```{r}
+k_dichotomisation_recoded <- k_dichotomisation %>%
+  mutate_at(
+    vars(-("id")),
+  ~ case_when(.==2~"delay",
+              TRUE~NA_character_
+            ))
+```
+
+manually recode and rename variables in preparation for topic modelling
+
+```{r}
+phenomes_prep <- phenomes_clean %>%
+  mutate(
+    id = individualid,
+    special_diet_prev = case_when(special_diet_prev==1~"past-diet",TRUE~NA_character_),
+    casein_free_diet = case_when(casein_free_diet==1~"casein-free",TRUE~NA_character_),
+    gluten_free_diet = case_when(gluten_free_diet==1~"gluten-free",TRUE~NA_character_),
+    dairy_free_diet = case_when(dairy_free_diet==1~"dairy-free",TRUE~NA_character_),
+    egg_free_diet = case_when(egg_free_diet==1~"egg-free",TRUE~NA_character_),
+    acoustic = case_when(acoustic>=3~"high-acoustic",acoustic<=2~"low-acoustic",TRUE~NA_character_),
+    tactile = case_when(tactile>=3~"high-tactile",tactile<=2~"low-tactile",TRUE~NA_character_),
+    pain = case_when(pain>=3~"high-pain",pain<=2~"low-pain",TRUE~NA_character_),
+    visual = case_when(visual>=3~"high-visual",visual<=2~"low-visual",TRUE~NA_character_),
+    floppy_infant = case_when(floppy_infant==1~"infant-floppy",TRUE~NA_character_),
+    stiff_infant = case_when(stiff_infant==1~"infant-stiff",TRUE~NA_character_),
+    irritable_unconsolable_infant = case_when(irritable_unconsolable_infant==1~"infant-irritable",TRUE~NA_character_),
+    lethargic_overly_sleepy_infant = case_when(lethargic_overly_sleepy_infant==1~"infant-lethargic",TRUE~NA_character_),
+    craniofacial_problems = case_when(craniofacial_problems==1~"abnorm-craniofacial",TRUE~NA_character_),
+    skin_abnormalities = case_when(skin_abnormalities==1~"abnorm-skin",TRUE~NA_character_),
+    teeth_abnormalities = case_when(teeth_abnormalities==1~"abnorm-teeth",TRUE~NA_character_),
+    eye_abnormalities_structural = case_when(eye_abnormalities_structural==1~"abnorm-eye",TRUE~NA_character_),
+    ear_abnormalities_structural = case_when(ear_abnormalities_structural==1~"abnorm-ear",TRUE~NA_character_),
+    ear_pe_tubes = case_when(ear_pe_tubes==1~"abnorm-ear-pe",TRUE~NA_character_),
+    bone_abnormalities = case_when(bone_abnormalities==1~"abnorm-bone",TRUE~NA_character_),
+    joint_abnormalities = case_when(joint_abnormalities==1~"abnorm-joint",TRUE~NA_character_),
+    respiratory_problems = case_when(respiratory_problems==1~"abnorm-respiratory",TRUE~NA_character_),
+    asthma = case_when(asthma==1~"asthma",TRUE~NA_character_),
+    allergies = case_when(allergies==1~"allergies",TRUE~NA_character_),
+    heart_problems = case_when(heart_problems==1~"abnorm-heart",TRUE~NA_character_),
+    gastrointestinal_problems = case_when(gastrointestinal_problems==1~"abnorm-gastro",TRUE~NA_character_),
+    kidney_urinary_problems = case_when(kidney_urinary_problems==1~"abnorm-renal",TRUE~NA_character_),
+    genital_problems = case_when(genital_problems==1~"abnorm-genital",TRUE~NA_character_),
+    endocrine_problems_growth = case_when(endocrine_problems_growth==1~"endocrine-growth",TRUE~NA_character_),
+    endocrine_problems_thyroid = case_when(endocrine_problems_thyroid==1~"endocrine-thyroid",TRUE~NA_character_),
+    endocrine_problems_sex_hormone = case_when(endocrine_problems_sex_hormone==1~"endocrine-sex",TRUE~NA_character_),
+    endocrine_problems_diabetes = case_when(endocrine_problems_diabetes==1~"endocrine-diabetes",TRUE~NA_character_),
+    abnormal_growth_pattern = case_when(abnormal_growth_pattern==1~"abnorm-growth",TRUE~NA_character_),
+    vision_problems = case_when(vision_problems==1~"vision",TRUE~NA_character_),
+    hearing_problems = case_when(hearing_problems==1~"hearing",TRUE~NA_character_),
+    hearing_assessed_by_baer = case_when(hearing_assessed_by_baer==1~"hearing-baer",TRUE~NA_character_),
+    hearing_assessed_by_behavioral = case_when(hearing_assessed_by_behavioral==1~"hearing-behavioural",TRUE~NA_character_),
+    hearing_assessment_result = case_when(hearing_assessment_result==1~"hearing-assessment",TRUE~NA_character_),
+    febrile_seizures = case_when(febrile_seizures==1~"seizures-febrile",TRUE~NA_character_),
+    other_seizures = case_when(other_seizures==1~"seizures-other",TRUE~NA_character_),
+    intractability_of_seizures = case_when(intractability_of_seizures==1~"seizures-intractable",TRUE~NA_character_),
+    handedness = case_when(handedness==1~"handed-right",handedness==2~"handed-left",TRUE~NA_character_),
+    cerebral_abnormalities = case_when(cerebral_abnormalities==1~"abnorm-cerebral",TRUE~NA_character_),
+    movement_abnormalities = case_when(movement_abnormalities==1~"abnorm-movement",TRUE~NA_character_),
+    stereotypies = case_when(stereotypies==1~"stereotypies",TRUE~NA_character_),
+    coordination_abnormalities = case_when(coordination_abnormalities==1~"abnorm-coordination",TRUE~NA_character_),
+    gait_abnormalities = case_when(gait_abnormalities==1~"abnorm-gait",TRUE~NA_character_),
+    sensory_abnormalities = case_when(sensory_abnormalities==1~"abnorm-sensory",TRUE~NA_character_),
+    karyotype = case_when(karyotype==1~"test-karyotype",TRUE~NA_character_),
+    metabolic = case_when(metabolic==1~"test-metabolic",TRUE~NA_character_),
+    other_molecular = case_when(other_molecular==1~"test-other",TRUE~NA_character_),
+    imaging_study_3 = case_when(imaging_study_3==1~"test-imaging",TRUE~NA_character_),
+    depressive_symptoms = case_when(depressive_symptoms==1~"symptoms-depression",TRUE~NA_character_),
+    depression_diagnosis = case_when(depression_diagnosis==1~"diagnosis-depression",TRUE~NA_character_),
+    bipolar_mood_disorder_symptoms = case_when(bipolar_mood_disorder_symptoms==1~"symptoms-bpd",TRUE~NA_character_),
+    bmd_diagnosis = case_when(bmd_diagnosis==1~"diagnosis-bmd",TRUE~NA_character_),
+    anxiety_symptoms = case_when(anxiety_symptoms==1~"symptoms-anxiety",TRUE~NA_character_),
+    anxiety_diagnosis = case_when(anxiety_diagnosis==1~"diagnosis-anxiety",TRUE~NA_character_),
+    ocd_symptoms = case_when(ocd_symptoms==1~"symptoms-ocd",TRUE~NA_character_),
+    ocd_diagnosis = case_when(ocd_diagnosis==1~"diagnosis-ocd",TRUE~NA_character_),
+    adhd_symptoms = case_when(adhd_symptoms==1~"symptoms-adhd",TRUE~NA_character_),
+    adhd_diagnosis = case_when(adhd_diagnosis==1~"diagnosis-adhd",TRUE~NA_character_),
+    behavioral_problem_symptoms = case_when(behavioral_problem_symptoms==1~"symptoms-odd",TRUE~NA_character_),
+    behavioral_problem_diagnosis = case_when(behavioral_problem_diagnosis==1~"diagnosis-odd",TRUE~NA_character_),
+    sleep_disorder_symptoms = case_when(sleep_disorder_symptoms==1~"symptoms-sleep",TRUE~NA_character_),
+    sleep_disorder_diagnosis = case_when(sleep_disorder_diagnosis==1~"diagnosis-sleep",TRUE~NA_character_),
+    difficulty_falling_asleep = case_when(difficulty_falling_asleep==1~"sleep-insomnia",TRUE~NA_character_),
+    interupted_sleep = case_when(interupted_sleep==1~"sleep-interrupted",TRUE~NA_character_),
+    night_terrors = case_when(night_terrors==1~"sleep-terrors",TRUE~NA_character_),
+    excessive_movements = case_when(excessive_movements==1~"sleep-fidgeting",TRUE~NA_character_),
+    history_of_being_hospitalized = case_when(history_of_being_hospitalized==1~"past-hospital",TRUE~NA_character_),
+    dietary_preferences = case_when(dietary_preferences==1~"diet-preferences",TRUE~NA_character_),
+    extremely_picky = case_when(extremely_picky==1~"diet-picky",TRUE~NA_character_),
+    high_carbohydrate = case_when(high_carbohydrate==1~"diet-carbohydrates",TRUE~NA_character_),
+    high_salt = case_when(high_salt==1~"diet-salt",TRUE~NA_character_),
+    high_sweet = case_when(high_sweet==1~"diet-sugar",TRUE~NA_character_),
+    specific_texture = case_when(specific_texture==1~"diet-texture",TRUE~NA_character_),
+    pica_observed = case_when(pica_observed==1~"diet-pica",TRUE~NA_character_),
+    alcohol_use = case_when(alcohol_use==1~"current-alcohol",TRUE~NA_character_),
+    previous_alcohol_use = case_when(previous_alcohol_use==1~"past-alcohol",TRUE~NA_character_),
+    tobacco_use = case_when(tobacco_use==1~"current-tobacco",TRUE~NA_character_),
+    previous_tobacco_use = case_when(previous_tobacco_use==1~"past-tobacco",TRUE~NA_character_),
+    drug_use = case_when(drug_use==1~"current-drugs",TRUE~NA_character_),
+    previous_drug_use = case_when(previous_drug_use==1~"past-drugs",TRUE~NA_character_)
+  ) %>%
+  full_join(k_dichotomisation_recoded %>%
+              mutate(
+                roll_months = case_when(roll=="delay"~"delay-roll",TRUE~NA_character_),
+                sit_months = case_when(sit=="delay"~"delay-sit",TRUE~NA_character_),
+                walk_months = case_when(walk=="delay"~"delay-walk",TRUE~NA_character_),
+                first_words_months = case_when(words=="delay"~"delay-words",TRUE~NA_character_),
+                first_phrases_months = case_when(phrases=="delay"~"delay-phrases",TRUE~NA_character_),
+                toilet_training_day_bladder = case_when(diem_bladder=="delay"~"delay-bladder-diem",TRUE~NA_character_),
+                toilet_training_day_bowel = case_when(diem_bowel=="delay"~"delay-bowel-diem",TRUE~NA_character_),
+                toilet_training_night_bladder = case_when(nocte_bladder=="delay"~"delay-bladder-nocte",TRUE~NA_character_),
+                toilet_training_night_bowel = case_when(nocte_bowel=="delay"~"delay-bowel-nocte",TRUE~NA_character_),
+              ) %>%
+              select(id,roll_months,sit_months,walk_months,first_words_months,first_phrases_months,
+                     toilet_training_day_bladder,toilet_training_day_bowel,toilet_training_night_bladder,
+                     toilet_training_night_bowel),
+            by="id"
+            ) %>%
+  select(!individualid) %>%
+  drop_na(id)
+
+glimpse(phenomes_prep)
+```
+
+make pseudo EMRs and prepare components for topic modelling
+
+```{r}
+library(quanteda)
+library(tidytext)
+
+phenomes_emr <- phenomes_prep %>%
+  column_to_rownames(var="id") %>%
+  unite(.,col = "emr", 1:93,na.rm=TRUE, sep = " ") %>%
+  filter(!rapportools::is.empty(emr)==TRUE) %>%
+  rownames_to_column(var = "id")
+
+# using the quanteda package because tidytext splits hyphenation by default
+phenomes_corpus <- corpus(phenomes_emr$emr,docnames=phenomes_emr$id)
+phenomes_ngrams <- tokens_ngrams(tokens(phenomes_corpus),n=1,concatenator=" ")
+phenomes_dfm <- dfm(phenomes_ngrams)
+
+# convert corpus into sparse matrix
+phenomes_sparse <- phenomes_dfm %>% 
+  tidytext::tidy() %>%
+  cast_sparse(document,term,count)
+
+head(phenomes_emr$emr)
+```
+
+test a range of numbers of clusters using a parallel process
+
+```{r}
+library(stm)
+library(furrr)
+
+plan(multiprocess)
+
+phenomes_models <- data_frame(K = c(6,8,10,12,14,16,18,20,22,24)) %>%
+  mutate(topic_model = future_map(K, ~ stm(phenomes_sparse,
+                                           K=.,verbose=FALSE)
+                                  ))
+
+head(phenomes_models)
+```
+
+calculate statistics for investigating the appropriate number of topics to model
+
+```{r}
+heldout <- make.heldout(phenomes_sparse)
+
+k_result <- phenomes_models %>%
+  mutate(exclusivity = map(topic_model, exclusivity),
+         semantic_coherence = map(topic_model, semanticCoherence, phenomes_sparse),
+         eval_heldout = map(topic_model, eval.heldout, heldout$missing),
+         residual = map(topic_model, checkResiduals, phenomes_sparse),
+         bound =  map_dbl(topic_model, function(x) max(x$convergence$bound)),
+         lfact = map_dbl(topic_model, function(x) lfactorial(x$settings$dim$K)),
+         lbound = bound + lfact,
+         iterations = map_dbl(topic_model, function(x) length(x$convergence$bound)))
+
+k_result
+```
+
+examine coherence of topic models
+
+```{r}
+k_result %>%
+  transmute(K,
+            `Lower bound` = lbound,
+            Residuals = map_dbl(residual, "dispersion"),
+            `Semantic coherence` = map_dbl(semantic_coherence, mean),
+            `Held-out likelihood` = map_dbl(eval_heldout, "expected.heldout")) %>%
+  gather(Metric, Value, -K) %>%
+  ggplot(aes(K, Value, color = Metric)) +
+  geom_line(size = 1.5, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(x = "K (number of topics)",
+       y = NULL,
+       title = "Model diagnostics by number of topics",
+       subtitle = "These diagnostics indicate that 18 is an appropriate number of topics")
+```
+
+the held-out likelihood is high and stable from 14 to 24 topics however it spikes at 18
+the held-out likelihood is coincident with a minimum for the residuals, suggesting that the variance is being optimsed at 18 topics
+semantic coherence stabilises for 16-18 topic range
+
+compare feature exclusivity versus semantic coherence
+
+```{r}
+k_result %>%
+  select(K, exclusivity, semantic_coherence) %>%
+  filter(K %in% c(14,16,18)) %>%
+  unnest(cols = c(exclusivity, semantic_coherence)) %>%
+  mutate(K = as.factor(K)) %>%
+  ggplot(aes(semantic_coherence, exclusivity, color = K)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x = "Semantic coherence",
+       y = "Exclusivity",
+       title = "Comparing exclusivity and semantic coherence",
+       subtitle = "Models with fewer topics have higher semantic coherence for more topics, but lower exclusivity")
+```
+
+no real trade-off between exclusivity and coherence
+
+extracting the model for number of topics = 18
+
+```{r}
+phenomes_tm <- k_result %>% 
+  filter(K == 18) %>% 
+  pull(topic_model) %>% 
+  .[[1]]
+
+phenomes_beta <- phenomes_tm %>%
+  tidytext::tidy()
+
+phenomes_gamma <- phenomes_tm %>%
+  tidy(matrix="gamma",document_names=rownames(phenomes_sparse))
+```
+
+explore model
+
+```{r}
+beta_terms <- phenomes_beta %>%
+  arrange(beta) %>%
+  group_by(topic) %>%
+  top_n(12, beta) %>%
+  arrange(-beta) %>%
+  select(topic, term) %>%
+  summarise(terms = list(term)) %>%
+  mutate(terms = map(terms, paste, collapse = ", ")) %>% 
+  unnest(cols = c(terms))
+
+gamma_terms <- phenomes_gamma %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(beta_terms, by = "topic") %>%
+  mutate(topic = paste0("Topic ", topic),
+         topic = reorder(topic, gamma))
+```
+
+build table of results
+
+```{r}
+library(kableExtra)
+
+gamma_terms %>%
+  select(topic, gamma, terms) %>%
+  kable(format = "html",digits = 3, 
+        col.names = c("Topic", "Expected topic proportion", "Top 7 terms"),
+        caption = "Dummy text 1",
+        align = c("l","c","l"),
+        ) %>%
+  kable_styling(full_width = TRUE,bootstrap_options = c("condensed","responsive")) %>%
+  footnote(general_title = "Note.",general = "Dummy text 2",footnote_as_chunk = TRUE)
+```
+
+```{r}
+phenomes_tidy %>%
+    count(document, term, sort = TRUE) %>%
+    bind_tf_idf(term, document, n) %>%
+    arrange(-tf_idf) %>%
+    group_by(document) %>%
+    top_n(10) %>%
+    ungroup
+```
+
+run latent dirichlet allocation process more robust model params for k=18 and write outputs
+
+```{r}
+library(tm)
+library(topicmodels)
+
+# generate the LDA model
+phenomes_lda <- LDA(phenomes_dfm,k=18,method="Gibbs",
+                    control=list(nstart=5,seed=list(254672,109,122887,145629037,2), 
+                                 best=TRUE,burnin=1000,iter=2000,thin=500))
+
+phenomes_terms <- as.matrix(terms(phenomes_lda,16))
+phenomes_topics <- as.matrix(topics(phenomes_lda))
+
+# make primary output table
+phenomes_probs <- as.data.frame(phenomes_lda@gamma)
+rownames(phenomes_probs) <- rownames(phenomes_sparse)
+
+# write outputs to .csv
+write.csv(phenomes_topics,file=paste0("lda_gibbs_",18,"_docs-to-topics.csv"))
+write.csv(phenomes_probs,file=paste0("lda-gibbs_",18,"_topic-probs.csv"))
+write.csv(phenomes_terms,file=paste0("lda-gibbs_",18,"_terms-to-topics.csv"))
+```
+
+visualise using heat-map
+
+```{r}
+heatmap(as.matrix(phenomes_probs),Colv=NA,scale="column")
+```
+
+
